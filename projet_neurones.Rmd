@@ -1,0 +1,177 @@
+---
+title: "projet_neur"
+output: html_document
+date: "2025-02-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(corrplot)
+library(FactoMineR)
+library(factoextra)
+```
+
+```{r}
+data=read.csv("enr_1_modif.csv")
+```
+
+
+
+```{r}
+#Aperçu des données
+head(data)
+
+#Description
+summary(data)
+```
+```{r}
+ggplot(data, aes(x = data[, 1])) +  # Colonne de temps sur l'axe x
+  geom_line(aes(y = data[, 2], color = "Electrode 1")) +  # 2ème colonne (Electrode 1)
+  geom_line(aes(y = data[, 3], color = "Electrode 2")) +  # 3ème colonne (Electrode 2)
+  labs(x = "Temps", y = "Amplitude", title = "Signaux des électrodes")
+```
+
+```{r}
+# Boxplot pour l'Electrode 1 (2e colonne du dataset)
+boxplot(data[, 16], main = "Boxplot de l'Electrode 14", 
+        ylab = "Amplitude", outline = TRUE)
+# Boxplot pour les électrodes 1 à 20
+boxplot(data[, 2:60], main = "Boxplots des Electrodes 1 à 59", 
+        ylab = "Amplitude", col = rainbow(10), outline = FALSE, las = 2)
+
+
+```
+
+```{r}
+# Transformer les données en format long
+data_long <- data %>% pivot_longer(cols = -1, names_to = "Electrode", values_to = "Amplitude")
+
+# Échantillonnage pour ggplot2 (1%)
+sample_data_long <- data_long %>% sample_frac(0.01)
+
+# Boxplot avec ggplot2
+ggplot(sample_data_long, aes(x = Electrode, y = Amplitude)) +
+  geom_boxplot(fill = "lightblue", outlier.colour = "red", outlier.size = 1) +
+  labs(x = "Electrodes", y = "Amplitude", title = "Boxplots des Electrodes (échantillon 1%)") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+```{r}
+# Moyenne et écart-type pour chaque électrode (excluant la colonne Temps)
+mean_values <- colMeans(data[, -1], na.rm = TRUE)  # Moyenne
+sd_values <- apply(data[, -1], 2, sd, na.rm = TRUE)  # Écart-type
+
+# Affichage des premières valeurs
+print("Moyennes pour les premières électrodes")
+head(mean_values)
+print("Ecarts-types pour les premières électrodes")
+head(sd_values)
+
+
+```
+```{r}
+# Matrice de corrélation
+cor_matrix <- cor(data[, -1], use = "pairwise.complete.obs")
+
+# Afficher un extrait de la matrice (les premières électrodes)
+#head(cor_matrix[, 1:5])
+
+#Matrice complète
+#cor_matrix
+
+#Matrice complète avec les ellipses
+corrplot(cor_matrix, method = "ellipse", type = "full", tl.pos="n")
+
+#Seulement la moitié supérieure pour plus de clarté
+corrplot(cor_matrix, method = "ellipse", type = "upper", tl.pos = "n")
+
+
+
+```
+## ACP sur le signal brute
+
+
+```{r}
+# On applique l'ACP en ayant nos données centrées et réduites (scale.unit=TRUE)
+pca_result <- PCA(data[, -1], scale.unit = TRUE, graph = FALSE)
+
+#Résumé des résultats:
+summary(pca_result, ncp=5) #5 composantes principales nécessaires
+
+# Graphe des variances expliquées
+fviz_screeplot(pca_result, addlabels = TRUE, barfill = "blue", barcolor = "black")
+
+```
+Commentaire : Ici, on a besoin de 5 (4 c'est ok, même 3 avec le graphe on remarque que c'est ok) dimensions pour expliquer 80% de notre jeu de données.
+
+```{r}
+# Cercle des corrélations
+fviz_pca_var(pca_result, col.var = "contrib", repel = TRUE,label="none")
+```
+```{r}
+#Je vais refaire mon cercle de corrélations en masquant tous les électrodes à nouveau sauf le 18, 19, 20 et 21 en créant mon propre label
+
+# Filtrer les électrodes 18 à 22 (indices 18 à 22 dans le jeu de données)
+electrodes_selected <- 19:23
+
+# Extraire les coordonnées des électrodes sélectionnées pour les utiliser dans le cercle de corrélation
+coord_selected <- pca_result$var$coord[electrodes_selected, ]
+
+# Créer un graphique avec uniquement les électrodes 18 à 22
+pca_plot_filtered <- fviz_pca_var(pca_result, 
+                                  col.var = "contrib",    # Couleur selon la contribution des variables
+                                  repel = TRUE,            # Empêcher le chevauchement des labels
+                                  label = "none")          # Pas de labels par défaut
+
+# Ajouter les flèches pour les électrodes sélectionnées
+pca_plot_filtered + 
+  geom_text(data = data.frame(x = coord_selected[, 1], y = coord_selected[, 2], 
+                              label = rownames(coord_selected)), 
+            aes(x = x, y = y, label = label), 
+            color = "red", size = 3, fontface = "bold")
+  
+
+```
+```{r}
+# Projection des observations (points)
+fviz_pca_ind(pca_result, label = "none", habillage = "none", geom = "point")
+```
+Commentaires : On ne remarque pas de tandances particulières. Pas de outliers particuliers.
+
+```{r}
+# Contribution des électrodes à PC1 et PC2
+fviz_contrib(pca_result, choice = "var", axes = 1, top = 10)
+fviz_contrib(pca_result, choice = "var", axes = 2, top = 10)
+
+```
+```{r}
+#Réduction de la dimensionnalité : 
+
+# Effectuer l'ACP et garder les 4 premières composantes principales
+pca_result_4dim <- PCA(data[, -1], ncp = 4)
+
+# Obtenir les scores des individus sur les 4 premières composantes principales
+data_reduced_4dim <- pca_result_4dim$ind$coord
+
+```
+## Test clustering
+
+```{r}
+# Appliquer K-means sur les données réduites (4 dimensions)
+set.seed(42)  # Pour la reproductibilité
+kmeans_result <- kmeans(data_reduced_4dim, centers = 3)  # 3 clusters par exemple
+
+# Visualiser les résultats
+fviz_cluster(kmeans_result, data = data_reduced_4dim, geom = "point")
+
+```
+```{r}
+kmeans_result$centers  # Afficher les centres des clusters
+head(kmeans_result$cluster)  # Afficher l'assignation des clusters pour chaque individu
+
+```
+

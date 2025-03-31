@@ -12,6 +12,8 @@ library(dplyr)
 library(corrplot)
 library(FactoMineR)
 library(factoextra)
+library(signal)       
+
 ```
 
 ```{r}
@@ -172,6 +174,309 @@ fviz_cluster(kmeans_result, data = data_reduced_4dim, geom = "point")
 ```{r}
 kmeans_result$centers  # Afficher les centres des clusters
 head(kmeans_result$cluster)  # Afficher l'assignation des clusters pour chaque individu
+
+```
+
+## Filtrage du signal
+```{r}
+
+sampling_rate <- 20000  # Fréquence d'échantillonnage (ex: 20 kHz, à adapter si différent)
+
+# Création du filtre passe-bande
+bf <- butter(4, c(300, 3000) / (sampling_rate / 2), type = "pass")  
+
+# Appliquer le filtre à toutes les électrodes (sauf la colonne temps)
+data_filtered <- data
+data_filtered[, -1] <- apply(data[, -1], 2, function(x) filtfilt(bf, x))
+
+
+```
+
+Ici on met un filtre 300-3000 kHZ car :
+-En dessous de 300 Hz : bruit de fond et variations lentes
+-Au-dessus de 3000 Hz : artefacts et bruit haute fréquence
+
+
+
+
+
+
+
+
+
+
+##Détection de pics
+
+###Calcul du seuil
+
+```{r}
+#Pour l'instant, je définis le seuil comme 5 fois celui de l'écart type. J'en définis un positif et un négtaif.
+thresholds_pos <- apply(data_filtered[, -1], 2, function(x) mean(x) + 5 * sd(x))
+thresholds_neg <- apply(data_filtered[, -1], 2, function(x) mean(x) - 5 * sd(x))
+```
+
+###Trouver les pics
+
+```{r}
+#Fonction pour détecter les pics positifs et négatifs
+find_peaks <- function(signal, threshold_pos, threshold_neg) {
+  peaks_pos <- which(signal > threshold_pos)  # Pics positifs, retourne les indices où le signal dépasse le seuil
+  peaks_neg <- which(signal < threshold_neg)  # Pics négatifs
+  return(list(pos = peaks_pos, neg = peaks_neg))
+}
+```
+
+
+```{r}
+#Appliquer la détection des pics à toutes les électrodes
+spikes <- lapply(2:ncol(data_filtered), function(i) 
+  find_peaks(data_filtered[, i], thresholds_pos[i-1], thresholds_neg[i-1])
+)
+names(spikes) <- colnames(data_filtered)[-1]  # Associer chaque électrode
+
+
+```
+lapply() applique find_peaks() à toutes les électrodes
+spikes contient les indices de pics pour chaque électrode
+
+###Visualisation des pics
+
+```{r}
+#Visualisation des pics sur une électrode
+electrode_id <- 2  # Exemple : électrode 1 (colonne 2 du dataframe)
+time <- data[, 1]  # Récupérer la colonne temps
+
+ggplot() +
+  geom_line(aes(x = time, y = data_filtered[, electrode_id]), color = "blue") +  # Signal filtré
+  geom_point(aes(x = time[spikes[[electrode_id - 1]]$pos], 
+                 y = data_filtered[spikes[[electrode_id - 1]]$pos, electrode_id]), 
+             color = "red", size = 2) +  # Pics positifs
+  geom_point(aes(x = time[spikes[[electrode_id - 1]]$neg], 
+                 y = data_filtered[spikes[[electrode_id - 1]]$neg, electrode_id]), 
+             color = "green", size = 2) +  # Pics négatifs
+  labs(title = paste("Détection des pics sur l'électrode", colnames(data_filtered)[electrode_id]))
+
+```
+
+##Extraction des formes d'ondes des pics
+
+```{r}
+#On extrait 20 points avant et après chaque pics 
+
+extract_waveforms <- function(signal, peaks, window = 20) {
+  # Filtrer les pics trop proches des bords
+  valid_peaks <- peaks[peaks > window & peaks < (length(signal) - window)]
+  
+  # Extraire les segments autour des pics valides
+  waveforms <- lapply(valid_peaks, function(p) signal[(p - window):(p + window)])
+  
+  return(waveforms)
+}
+
+# Appliquer à toutes les électrodes
+waveforms <- lapply(2:ncol(data_filtered), function(i) 
+  extract_waveforms(data_filtered[, i], spikes[[i-1]]$pos)  # Pour les pics positifs uniquement
+)
+
+# Associer les noms des électrodes
+names(waveforms) <- colnames(data_filtered)[-1]
+
+
+```
+Chaque pic est stocké sous forme de mini-signal de 40 points
+
+On peut ensuite les visualiser pour voir leur morphologie
+
+##Clustering des pics
+
+###ACP sur les pics
+
+Avant de faire l’ACP, on doit transformer les pics extraits en une matrice exploitable. Actuellement, waveforms est une liste où chaque entrée correspond aux segments extraits autour des pics pour chaque électrode.
+
+Objectif : Convertir cette liste en une matrice où chaque ligne représente un pic et chaque colonne un point temporel autour du pic.
+
+```{r}
+# Transformer les segments en une matrice
+waveform_matrix <- do.call(rbind, lapply(waveforms, function(electrode_waveforms) {
+  do.call(rbind, electrode_waveforms)  # Chaque pic devient une ligne
+}))
+
+# Vérifier la taille de la matrice
+dim(waveform_matrix)  # Nombre de pics x Nombre de points par segment
+
+```
+lapply(waveforms, ...) applique la fusion (rbind) sur chaque électrode.
+
+do.call(rbind, ...) assemble tous les pics pour créer une matrice finale.
+
+
+On applique maintenant l'ACP
+```{r}
+# Centrer-réduire les données avant ACP
+waveform_matrix_scaled <- scale(waveform_matrix)
+
+# Appliquer ACP avec prcomp()
+pca_waveforms <- prcomp(waveform_matrix_scaled, center = TRUE, scale. = TRUE)
+
+# Visualiser la variance expliquée
+fviz_eig(pca_waveforms, addlabels = TRUE)
+
+```
+scale() centre et réduit les valeurs pour éviter les biais liés aux amplitudes.
+
+prcomp() exécute l’ACP.
+
+fviz_eig() permet de voir combien de dimensions sont nécessaires pour expliquer la variance.
+
+```{r}
+# Calcul de la variance cumulée
+variance_expliquee <- summary(pca_waveforms)$importance[3, ]  # Ligne 3 = variance cumulée
+#nb_cp_opt <- which(variance_expliquee >= 0.80)[1]  # 80% de variance
+#print(nb_cp_opt)
+
+#Sinon choisir à la main nb_opt_opt
+nb_cp_opt=3
+
+# Réduction des données avec ces composantes
+waveform_pca_data <- pca_waveforms$x[, 1:nb_cp_opt]
+
+```
+Visualiser les individus
+```{r}
+fviz_pca_ind(pca_waveforms, label = "none", habillage = "none", geom = "point")
+```
+
+
+Chaque point de l'ACP représenge un pic
+
+###Clustering
+
+
+Trouver le bon nombre de clusters pour K-means => méthode du coude et silhouette
+
+####Méthode du coude 
+
+```{r}
+fviz_nbclust(waveform_pca_data, kmeans, method = "wss")  # Elbow method
+```
+Erreur car mon jeu de données est trop gros 
+Je vais tester avec un sous échantillon de données pour la méthode du coude 
+
+```{r}
+set.seed(42)  # Pour reproductibilité
+sample_indices <- sample(nrow(waveform_pca_data), size = 5000)  # Sélectionne 5000 points aléatoires
+waveform_sample <- waveform_pca_data[sample_indices, ]
+
+# Relancer la méthode Elbow
+fviz_nbclust(waveform_sample, kmeans, method = "wss")
+
+```
+On a sélectionner 5000 points aléatoires car sinon il y avait trop de données. On obtient ainsi une estimation du nombre de clusters idéal sans calculer sur toute la base.
+
+=> Nbr idéal : 2 clusters
+
+####Méthode silhouette 
+
+On peut vérifier avec la méthode silhouette
+
+```{r}
+library(cluster)
+
+# Application du clustering k-means
+sil_width <- sapply(2:10, function(k) {
+  km <- kmeans(waveform_pca_data, centers = k, nstart = 10)
+  mean(silhouette(km$cluster, dist(waveform_pca_data))[, 3])
+})
+
+# Visualisation de la largeur moyenne de silhouette pour chaque nombre de clusters
+plot(2:10, sil_width, type = "b", pch = 19, frame = FALSE, 
+     xlab = "Nombre de clusters", ylab = "Largeur moyenne de silhouette")
+
+```
+Pareil, problème de taille. Je fais le même procédé que pour la méthode du coude.
+
+```{r}
+set.seed(42)  # Pour assurer la reproductibilité
+sample_size <- 5000  # Nombre d'échantillons à extraire
+
+# Extraire un sous-échantillon aléatoire des données (5000 points)
+sample_indices <- sample(1:nrow(waveform_pca_data), sample_size)
+waveform_pca_data_sampled <- waveform_pca_data[sample_indices, ]
+
+
+library(cluster)
+
+# Calculer la silhouette sur un échantillon de 5000 points pour différentes valeurs de k
+sil_width_sampled <- sapply(2:10, function(k) {
+  km <- kmeans(waveform_pca_data_sampled, centers = k, nstart = 10)
+  mean(silhouette(km$cluster, dist(waveform_pca_data_sampled))[, 3])
+})
+
+```
+
+```{r}
+# Trouver k optimal en cherchant le maximum de silhouette
+optimal_k <- which.max(sil_width_sampled) + 1  # +1 car l'index commence à 2
+
+#On limite le nbr max de clusters à 5
+if (optimal_k > 5) { 
+  optimal_k <- which.max(sil_width_sampled[1:4]) + 1  # Cherche le max parmi k=2 à k=5
+}
+
+# Plot de la largeur moyenne de silhouette pour chaque k
+plot(2:10, sil_width_sampled, type = "b", pch = 19, frame = FALSE, 
+     xlab = "Nombre de clusters", ylab = "Largeur moyenne de silhouette")
+
+# Ajouter une ligne verticale pour marquer le nombre optimal de clusters
+abline(v = optimal_k, col = "red", lty = 2)
+text(optimal_k, sil_width_sampled[optimal_k - 1], labels = paste("k =", optimal_k), pos = 4, col = "red")
+
+```
+####On applique K-means
+
+```{r}
+#On regroupe les pics en cluster
+
+set.seed(42)  # Reproductibilité
+k_opt <- 3  # Exemple basé sur l'elbow method
+kmeans_result <- kmeans(waveform_pca_data, centers = k_opt, nstart = 25)
+
+# Ajouter les labels des clusters aux données
+waveform_pca_data <- data.frame(waveform_pca_data, Cluster = as.factor(kmeans_result$cluster))
+
+
+```
+
+####Visualisation
+
+```{r}
+waveform_pca_data$Cluster <- as.numeric(as.character(waveform_pca_data$Cluster))
+str(waveform_pca_data)  # Vérifie le type des données
+
+```
+
+
+```{r}
+fviz_cluster(kmeans_result, data = waveform_pca_data, geom = "point")
+
+```
+C'est plutot pas mal 
+
+####Identifier les caractéristiques des clusters
+
+A retravailler
+
+```{r}
+#library(reshape2)
+#waveform_pca_data$Cluster <- kmeans_result$cluster
+
+# Calcul de la moyenne des formes d'onde par cluster
+#mean_waveforms <- aggregate(waveform_matrix, by = list(Cluster = waveform_pca_data$Cluster), mean)
+
+# Visualisation
+#ggplot(melt(mean_waveforms, id.vars = "Cluster"), aes(x = variable, y = value, color = as.factor(Cluster))) +
+#  geom_line() +
+#  labs(title = "Forme moyenne des pics par cluster")
 
 ```
 

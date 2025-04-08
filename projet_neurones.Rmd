@@ -13,6 +13,7 @@ library(corrplot)
 library(FactoMineR)
 library(factoextra)
 library(signal)       
+library(plotly)
 
 ```
 
@@ -177,6 +178,15 @@ head(kmeans_result$cluster)  # Afficher l'assignation des clusters pour chaque i
 
 ```
 
+
+
+
+
+
+
+
+
+
 ## Filtrage du signal
 ```{r}
 
@@ -197,20 +207,12 @@ Ici on met un filtre 300-3000 kHZ car :
 -Au-dessus de 3000 Hz : artefacts et bruit haute fréquence
 
 
-
-
-
-
-
-
-
-
 ##Détection de pics
 
 ###Calcul du seuil
 
 ```{r}
-#Pour l'instant, je définis le seuil comme 5 fois celui de l'écart type. J'en définis un positif et un négtaif.
+#Pour l'instant, je définis le seuil comme 5 fois celui de l'écart type. J'en définis un positif et un négatif.
 thresholds_pos <- apply(data_filtered[, -1], 2, function(x) mean(x) + 5 * sd(x))
 thresholds_neg <- apply(data_filtered[, -1], 2, function(x) mean(x) - 5 * sd(x))
 ```
@@ -283,6 +285,8 @@ names(waveforms) <- colnames(data_filtered)[-1]
 
 
 ```
+Qu'est ce que j'ai dans les colonnes de ma matrice une fois les pics sélectionnés ? => Nombre de pics x Nombre de points par segment ? essayer de voir si je peux adapter le nbr de points que je prends avant et après en fonction de la taille du pic (mais le problème c'est que après on a une matrice avec des colonnes de tailles différentes)
+
 Chaque pic est stocké sous forme de mini-signal de 40 points
 
 On peut ensuite les visualiser pour voir leur morphologie
@@ -343,8 +347,19 @@ waveform_pca_data <- pca_waveforms$x[, 1:nb_cp_opt]
 ```
 Visualiser les individus
 ```{r}
-fviz_pca_ind(pca_waveforms, label = "none", habillage = "none", geom = "point")
+#fviz_pca_ind(pca_waveforms, label = "none", habillage = "none", geom = "point") automatiquement il prend les dim 1 et 2
+fviz_pca_ind(pca_waveforms, label = "none", habillage = "none", geom = "point",axes = c(1, 2))
+fviz_pca_ind(pca_waveforms, label = "none", habillage = "none", geom = "point",axes = c(1, 3))
+fviz_pca_ind(pca_waveforms, label = "none", habillage = "none", geom = "point",axes = c(2, 3))
+
 ```
+Se poser les questions : qui sont les individus ect ...
+
+```{r}
+#Rajouter ici la visualisation 3D
+
+```
+
 
 
 Chaque point de l'ACP représenge un pic
@@ -438,7 +453,7 @@ text(optimal_k, sil_width_sampled[optimal_k - 1], labels = paste("k =", optimal_
 #On regroupe les pics en cluster
 
 set.seed(42)  # Reproductibilité
-k_opt <- 3  # Exemple basé sur l'elbow method
+k_opt <- 5  # 2 clusters
 kmeans_result <- kmeans(waveform_pca_data, centers = k_opt, nstart = 25)
 
 # Ajouter les labels des clusters aux données
@@ -457,10 +472,38 @@ str(waveform_pca_data)  # Vérifie le type des données
 
 
 ```{r}
-fviz_cluster(kmeans_result, data = waveform_pca_data, geom = "point")
+#fviz_cluster(kmeans_result, data = waveform_pca_data, geom = "point")
+
+#Pour éviter toute confusion :
+
+fviz_cluster(kmeans_result, data = waveform_pca_data[, 1:2], geom = "point")
+#On lui passe seulement les 3 premières dimensions de l’ACP (PC1, PC2, PC3) pour bien utiliser les données réduites après ACP.
+
+
 
 ```
 C'est plutot pas mal 
+
+Faire attention à ce que fviz_cluster ne refasse pas une ACP ==> fviz_cluster() ne refait pas une ACP, mais par défaut, il n'affiche que les deux premières dimensions principales (PC1 et PC2), ce qui peut donner l'impression que l'ACP est refaite.
+Explication en détail de ce que fais fviz_cluster : 
+
+-Utilise les coordonnées de l’ACP (déjà calculées) pour afficher les clusters.
+-Projette les points sur un plan 2D (en général PC1 et PC2).
+-Ne refait PAS une ACP, mais affiche les clusters en réduisant la dimension à 2D pour la visualisation.
+
+####Visualisation en 3D : 
+
+```{r}
+library(scatterplot3d)
+
+scatterplot3d(waveform_pca_data$PC1, 
+              waveform_pca_data$PC2, 
+              waveform_pca_data$PC3, 
+              color = as.numeric(waveform_pca_data$Cluster), 
+              pch = 19, main = "Clustering en 3D (PC1, PC2, PC3)")
+
+```
+
 
 ####Identifier les caractéristiques des clusters
 

@@ -1,0 +1,457 @@
+---
+title: "presentation"
+author: "Pedro"
+date: "2025-02-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+data<-read.csv2("2024-05-07.csv",sep=",")
+# Garder une ligne sur 10
+```
+
+
+```{r}
+data <- data[seq(1, nrow(data), by = 10), ]
+
+# Vérifier le nombre de lignes après l'échantillonnage
+```
+
+
+```{r}
+nrow(data)
+plot(data$Time, data$E1, type="l", col="blue", 
+     xlab="Temps", ylab="Amplitude", 
+     main="Évolution du signal de l'électrode E1",
+     lwd=1.5)
+
+```
+```{r}
+# Générer les nouveaux noms des électrodes
+new_names <- c("Time", paste0("E", 1:60))  # "Time" pour la 1ère colonne, "E1" à "E60" pour les autres
+
+# Appliquer les nouveaux noms au dataframe
+colnames(data) <- new_names
+
+# Vérifier le résultat
+head(data)
+
+```
+
+```{r}
+# Calcul de la matrice de corrélation pour toutes les électrodes
+# Inverser l'ordre des lignes pour corriger l'orientation
+cor_matrix <- cor(data[, -1], use="pairwise.complete.obs")
+#cor_matrix <- cor_matrix[nrow(cor_matrix):1, ]  # Inversion verticale
+
+# Vérifier la nouvelle matrice
+
+
+
+# Affichage d'un extrait de la matrice
+library(ggplot2)
+library(reshape2)
+
+# Transformer la matrice en format long
+cor_melted <- melt(cor_matrix)
+
+# Tracer la heatmap avec inversion de l'axe Y
+ggplot(cor_melted, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low="blue", high="red", mid="white", midpoint=0) +
+  scale_y_discrete(limits=rev(levels(as.factor(cor_melted$Var2)))) +  # Inversion axe Y
+  theme_minimal() +
+  labs(title="Matrice de Corrélation des Électrodes", x="Électrodes", y="Électrodes")
+
+
+```
+
+```{r}
+summary_stats <- data.frame(
+  Electrode = colnames(data)[-1],  # Exclure la colonne "Time"
+  Moyenne = colMeans(data[, -1], na.rm = TRUE),
+  ÉcartType = apply(data[, -1], 2, sd, na.rm = TRUE)
+)
+print(summary_stats)
+
+```
+
+```{r}
+hist(data$E14, breaks=50, main="Distribution des amplitudes - E14", xlab="Amplitude", col="lightblue")
+hist(data$E13, breaks=50, main="Distribution des amplitudes - E13", xlab="Amplitude", col="lightblue")
+hist(data$E15, breaks=50, main="Distribution des amplitudes - E15", xlab="Amplitude", col="lightblue")
+hist(data$E16, breaks=50, main="Distribution des amplitudes - E16", xlab="Amplitude", col="lightblue")
+
+
+```
+```{r}
+# Charger les bibliothèques nécessaires
+library(ggplot2)
+library(factoextra)  # Pour visualiser l'ACP et K-means
+library(mclust)  # Pour le clustering GMM
+library(cluster)  # Pour silhouette score
+library(dplyr)
+
+# Supprimer la colonne du temps
+```
+
+
+```{r}
+data_numeric <- data[, -1]
+
+# Standardiser les données (centrer-réduire)
+data_scaled <- scale(data_numeric)
+
+# Vérifier que les données sont bien centrées
+summary(data_scaled)
+```
+
+
+```{r}
+# Réaliser l'ACP
+pca_result <- prcomp(data_scaled, center = TRUE, scale. = TRUE)
+
+# Résumé de la variance expliquée par chaque composante
+summary(pca_result)
+
+# Graphique de la variance expliquée
+fviz_eig(pca_result, addlabels = TRUE, main = "Variance expliquée par chaque composante")
+
+```
+```{r}
+# Projection des données sur les deux premières composantes principales
+pca_data <- as.data.frame(pca_result$x)
+
+# Ajouter les noms des électrodes
+colnames(pca_data) <- paste0("PC", 1:ncol(pca_data))
+
+# Tracer les individus sur PC1 et PC2
+ggplot(pca_data, aes(x = PC1, y = PC2)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  theme_minimal() +
+  labs(title = "Projection des données sur PC1 et PC2")
+```
+
+
+```{r}
+# Tester plusieurs valeurs de k
+wss <- sapply(1:10, function(k) kmeans(pca_data[, 1:2], centers = k, nstart = 10)$tot.withinss)
+
+# Tracer la courbe du coude
+plot(1:10, wss, type="b", pch=19, frame=FALSE, xlab="Nombre de clusters (k)", ylab="Somme des carrés intra-cluster", main="Méthode du coude")
+```
+
+
+```{r}
+k_optimal <- 2
+
+kmeans_result <- kmeans(pca_data[, 1:2], centers = k_optimal, nstart = 10)
+
+# Ajouter les clusters au dataframe PCA
+pca_data$Cluster_Kmeans <- as.factor(kmeans_result$cluster)
+
+# Visualisation des clusters
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Cluster_Kmeans)) +
+  geom_point(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = paste("Clustering K-means avec k =", k_optimal))
+```
+
+
+```{r}
+kmeans_result$cluster
+```
+
+```{r}
+# Ajuster un modèle GMM et sélectionner le meilleur nombre de clusters
+gmm_model <- Mclust(pca_data[, 1:2])  # Recherche automatique du meilleur k
+summary(gmm_model)
+
+# Nombre optimal de clusters trouvé par GMM
+gmm_optimal <- gmm_model$G
+print(paste("Nombre optimal de clusters selon GMM :", gmm_optimal))
+
+```
+```{r}
+# Ajouter les labels GMM aux données
+pca_data$Cluster_GMM <- as.factor(gmm_model$classification)
+
+# Graphique des clusters GMM
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Cluster_GMM)) +
+  geom_point(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = paste("Clustering GMM avec", gmm_optimal, "clusters"))
+```
+
+
+```{r}
+table(Kmeans = pca_data$Cluster_Kmeans, GMM = pca_data$Cluster_GMM)
+plot(gmm_model$BIC, type="b", main="BIC pour différents nombres de clusters (GMM)", xlab="Nombre de clusters", ylab="BIC")
+
+
+```
+```{r}
+library(cluster)
+
+# Score silhouette pour K-means
+sil_kmeans <- silhouette(as.numeric(pca_data$Cluster_Kmeans), dist(pca_data[, 1:2]))
+mean(sil_kmeans[, 3])
+
+# Score silhouette pour GMM
+sil_gmm <- silhouette(as.numeric(pca_data$Cluster_GMM), dist(pca_data[, 1:2]))
+mean(sil_gmm[, 3])
+
+```
+```{r}
+gmm_model_restricted <- Mclust(pca_data[, 1:2], G = 2:5)  # Forcer entre 2 et 5 clusters
+summary(gmm_model_restricted)
+
+```
+```{r}
+gmm_optimal <- gmm_model_restricted$G
+print(paste("Nombre optimal de clusters selon GMM :", gmm_optimal))
+pca_data$Cluster_GMM <- as.factor(gmm_model_restricted$classification)
+```
+```{r}
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Cluster_GMM)) +
+  geom_point(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = paste("Clustering GMM avec", 3, "clusters"))
+sil_gmm <- silhouette(as.numeric(pca_data$Cluster_GMM), dist(pca_data[, 1:2]))
+mean(sil_gmm[, 3])
+```
+
+```{r}
+
+# Graphique des clusters GMM
+
+```
+```{r}
+
+
+# Définir les valeurs de k à tester
+
+
+# Trouver le nombre optimal de clusters qui maximise le silhouette score
+best_k <- 2
+
+# Afficher le nombre optimal de clusters et son score
+print(paste("Nombre optimal de clusters pour GMM:", best_k))
+print(paste("Silhouette score optimal:", max(silhouette_scores)))
+
+# Tracer le silhouette score en fonction du nombre de clusters
+plot(k_values, silhouette_scores, type="b", pch=19, frame=FALSE,
+     xlab="Nombre de clusters (k)", ylab="Score de silhouette",
+     main="Optimisation du nombre de clusters pour GMM")
+abline(v=best_k, col="red", lty=2)
+
+```
+```{r}
+# Ajouter les clusters K-means aux données d'origine
+data$Cluster <- as.factor(kmeans_result$cluster)
+
+# Vérifier combien de points sont dans chaque cluster
+table(data$Cluster)
+library(dplyr)
+
+# Moyenne et écart-type des signaux dans chaque cluster
+cluster_means <- data %>%
+  group_by(Cluster) %>%
+  summarise(across(starts_with("E"), mean, na.rm = TRUE))
+
+cluster_sd <- data %>%
+  group_by(Cluster) %>%
+  summarise(across(starts_with("E"), sd, na.rm = TRUE))
+
+print(cluster_means)
+print(cluster_sd)
+
+# Tracer les signaux moyens pour chaque cluster
+matplot(t(cluster_means[, -1]), type="l", lty=1, col=1:2, 
+        xlab="Électrodes", ylab="Amplitude moyenne", main="Comparaison des clusters")
+legend("topright", legend=paste("Cluster", levels(data$Cluster)), col=1:2, lty=1)
+
+```
+```{r}
+
+
+ggplot(pca_data, aes(x = PC1, y = PC2, color = data$Cluster)) +
+  geom_point(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Visualisation des clusters sur l'ACP", x = "PC1", y = "PC2")
+
+```
+
+```{r}
+plot(data$Time, as.numeric(data$Cluster), type="l",
+     xlab="Temps", ylab="Cluster", main="Évolution des clusters dans le temps")
+
+```
+```{r}
+# Exclure la colonne du temps et du cluster (dernière colonne)
+data_cluster1 <- data[data$Cluster == 1, -c(1, ncol(data))]
+data_cluster2 <- data[data$Cluster == 2, -c(1, ncol(data))]
+
+# Vérifier que les colonnes sont bien numériques
+data_cluster1 <- data.frame(lapply(data_cluster1, as.numeric))
+data_cluster2 <- data.frame(lapply(data_cluster2, as.numeric))
+
+# Recalculer les matrices de corrélation
+cor_cluster1 <- cor(data_cluster1, use="pairwise.complete.obs")
+cor_cluster2 <- cor(data_cluster2, use="pairwise.complete.obs")
+
+# Afficher les heatmaps
+par(mfrow=c(1,2))
+heatmap(cor_cluster1, main="Corrélation Cluster 1")
+heatmap(cor_cluster2, main="Corrélation Cluster 2")
+
+
+```
+```{r}
+library(dplyr)
+
+# Moyenne et écart-type des signaux dans chaque cluster
+cluster_means <- data %>%
+  group_by(Cluster) %>%
+  summarise(across(starts_with("E"), mean, na.rm = TRUE))
+
+cluster_sd <- data %>%
+  group_by(Cluster) %>%
+  summarise(across(starts_with("E"), sd, na.rm = TRUE))
+
+print(cluster_means)
+print(cluster_sd)
+
+# Tracer les signaux moyens pour chaque cluster
+matplot(t(cluster_means[, -1]), type="l", lty=1, col=1:2, 
+        xlab="Électrodes", ylab="Amplitude moyenne", main="Comparaison des clusters")
+legend("topright", legend=paste("Cluster", levels(data$Cluster)), col=1:2, lty=1)
+
+
+```
+```{r}
+library(dplyr)
+
+# Calculer la moyenne des électrodes dans chaque cluster
+electrode_clusters <- data %>%
+  group_by(Cluster) %>%
+  summarise(across(starts_with("E"), mean, na.rm = TRUE)) %>%
+  t()  # Transpose le tableau pour voir les électrodes en lignes
+
+# Transformer en data frame pour une meilleure lisibilité
+electrode_clusters <- as.data.frame(electrode_clusters[-1, ])  # Enlever la ligne du Cluster
+colnames(electrode_clusters) <- c("Moyenne_Cluster1", "Moyenne_Cluster2")
+
+# Déterminer le cluster d'appartenance de chaque électrode
+electrode_clusters$Cluster <- ifelse(electrode_clusters$Moyenne_Cluster1 > electrode_clusters$Moyenne_Cluster2, 1, 2)
+
+# Afficher les électrodes et leur cluster assigné
+print(electrode_clusters)
+
+```
+```{r}
+table(electrode_clusters$Cluster)  # Nombre d’électrodes par cluster
+electrodes_cluster1 <- rownames(electrode_clusters[electrode_clusters$Cluster == 1, ])
+electrodes_cluster2 <- rownames(electrode_clusters[electrode_clusters$Cluster == 2, ])
+
+print(paste("Électrodes du cluster 1 :", paste(electrodes_cluster1, collapse=", ")))
+print(paste("Électrodes du cluster 2 :", paste(electrodes_cluster2, collapse=", ")))
+
+```
+```{r}
+library(pracma)
+library(wavelets)
+library(cluster)
+library(factoextra)
+
+# Suppose que 'data' contient déjà les données (avec resampling fait)
+# Et que les colonnes ont été renommées en E1 à E60
+
+temps <- data[[1]]
+signal <- as.numeric(data$E4)  # Exemple : électrode E4
+
+```
+```{r}
+# Détection simple avec le package pracma
+peaks <- findpeaks(signal, minpeakheight = mean(signal) + sd(signal), minpeakdistance = 10)
+
+# Visualisation des pics détectés
+plot(temps, signal, type = "l", main = "Signal E4 avec pics détectés", xlab = "Temps", ylab = "Amplitude")
+points(temps[peaks[,2]], peaks[,1], col = "red", pch = 20)
+
+```
+```{r}
+# Transformée discrète avec paquets d’ondelettes
+wt <- dwt(signal, filter = "haar", n.levels = 4)
+
+# Extraire les coefficients de détail
+coeffs <- unlist(wt@W)  # vecteur de tous les détails
+
+# Visualiser un niveau particulier
+plot(coeffs[1:200], type = "l", main = "Coefficients d’ondelettes (détails)")
+
+```
+```{r}
+# On filtre les indices trop proches du bord
+valid_spike_indices <- spike_indices[spike_indices > 10 & spike_indices < (length(signal) - 10)]
+
+# Initialiser une matrice pour stocker les formes
+forms_matrix <- matrix(NA, nrow = length(valid_spike_indices), ncol = 21)
+
+# Extraire les formes
+for (j in seq_along(valid_spike_indices)) {
+  i <- valid_spike_indices[j]
+  forms_matrix[j, ] <- signal[(i - 10):(i + 10)]
+}
+
+# Optionnel : visualiser les premières formes
+par(mfrow=c(2, 5))
+for (k in 1:5) {
+  plot(forms_matrix[k, ], type="l", main=paste("Forme", k))
+}
+
+```
+
+```{r}
+# Avec transformée continue
+# Pour simplifier : on fait du clustering sur un sous-ensemble des coefficients
+# (Par exemple, les 1000 premiers coefficients)
+X <- matrix(coeffs[1:200], ncol = 1)
+
+# K-means avec 2 clusters
+set.seed(123)
+km <- kmeans(X, centers = 3)
+
+# Visualiser les clusters
+plot(X, col = km$cluster, pch = 20, main = "K-means sur coefficients d’ondelettes")
+centres <- kmeans_result$centers
+spike_cluster <- which.max(centres)
+
+```
+```{r}
+threshold <- mean(coeffs) +  5* sd(coeffs)
+
+spike_indices <- which(clusters == spike_cluster)
+spike_indices <- which(coeffs > threshold)
+
+plot(signal, type = "l")
+points(spike_indices, signal[spike_indices], col = "red", pch = 19)
+
+```
+```{r}
+# Définir un seuil
+threshold <- 100000000  # ajuster en fonction de ton signal
+
+# Seuillage dur : valeurs absolues supérieures au seuil restent, les autres sont mises à 0
+cleaned_signal <- ifelse(abs(signal) > threshold, signal, 0)
+
+# Afficher le signal avant et après débruitage
+par(mfrow=c(1,2))
+plot(signal, type="l", main="Signal original")
+plot(cleaned_signal, type="l", main="Signal débruité")
+
+```
+
